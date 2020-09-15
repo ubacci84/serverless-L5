@@ -5,15 +5,25 @@ import { secretsManager } from 'middy/middlewares'
 
 import { verify } from 'jsonwebtoken'
 import { JwtToken } from '../../auth/JwtToken'
+import { Client } from 'elasticsearch'
+import * as AWS from 'aws-sdk'
 
 const secretId = process.env.AUTH_0_SECRET_ID
 const secretField = process.env.AUTH_0_SECRET_FIELD
 
-export const handler = middy(async (event: CustomAuthorizerEvent, context): Promise<CustomAuthorizerResult> => {
+
+// Not needed when using middy
+//
+const client = new AWS.SecretsManager()
+
+// Cache secret if a Lambda instance is reused
+let cachedSecret: string
+
+
+export const handler = middy(async (event: CustomAuthorizerEvent): Promise<CustomAuthorizerResult> => {
   try {
-    const decodedToken = verifyToken(
+    const decodedToken = await verifyToken(
       event.authorizationToken,
-      context.AUTH0_SECRET[secretField]
     )
     console.log('User was authorized', decodedToken)
 
@@ -49,7 +59,7 @@ export const handler = middy(async (event: CustomAuthorizerEvent, context): Prom
   }
 })
 
-function verifyToken(authHeader: string, secret: string): JwtToken {
+async function verifyToken(authHeader: string): Promise<JwtToken> {
   if (!authHeader)
     throw new Error('No authentication header')
 
@@ -59,6 +69,9 @@ function verifyToken(authHeader: string, secret: string): JwtToken {
   const split = authHeader.split(' ')
   const token = split[1]
 
+  const secretObject: any = await getSecret()
+  const secret = secretObject[secretField]
+  
   return verify(token, secret) as JwtToken
 }
 
@@ -73,3 +86,20 @@ handler.use(
     }
   })
 )
+
+// Not needed when using middy
+//
+async function getSecret(){
+  if(cachedSecret) return cachedSecret
+
+  const data = await client
+    .getSecretValue({
+        SecretId: secretId
+    })
+    .promise()
+
+    cachedSecret = data.SecretString
+
+    return JSON.parse(cachedSecret)
+}
+
